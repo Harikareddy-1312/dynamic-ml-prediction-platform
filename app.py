@@ -1,8 +1,9 @@
 import streamlit as st
 import pandas as pd
 import time
+import numpy as np
 
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.model_selection import train_test_split
 
 from sklearn.tree import DecisionTreeClassifier
@@ -20,7 +21,7 @@ st.set_page_config(
 )
 
 # =========================================
-# CSS (UNCHANGED)
+# CSS
 # =========================================
 st.markdown("""
 <style>
@@ -69,7 +70,7 @@ div[data-testid="metric-container"] {
 """, unsafe_allow_html=True)
 
 # =========================================
-# HERO SECTION (UNCHANGED)
+# HERO
 # =========================================
 st.markdown("""
 <div style="
@@ -79,15 +80,12 @@ st.markdown("""
     text-align: center;
     margin-bottom: 25px;
 ">
-
 <h1 style="color: black; font-size: 42px;">
 Dynamic Machine Learning Prediction Platform
 </h1>
-
 <p style="color: black; font-size: 20px; font-weight: 600;">
 Upload datasets, train models, compare algorithms, and generate predictions.
 </p>
-
 </div>
 """, unsafe_allow_html=True)
 
@@ -96,24 +94,16 @@ Upload datasets, train models, compare algorithms, and generate predictions.
 # =========================================
 col_a, col_b, col_c = st.columns(3)
 
-with col_a:
-    st.metric("Supported Algorithms", "4")
-
-with col_b:
-    st.metric("ML Type", "Classification")
-
-with col_c:
-    st.metric("Framework", "Streamlit")
+col_a.metric("Supported Algorithms", "4")
+col_b.metric("ML Type", "Classification")
+col_c.metric("Framework", "Streamlit")
 
 # =========================================
 # SIDEBAR
 # =========================================
 st.sidebar.header("⚙️ Configuration")
 
-uploaded_file = st.sidebar.file_uploader(
-    "📂 Upload CSV Dataset",
-    type=["csv"]
-)
+uploaded_file = st.sidebar.file_uploader("📂 Upload CSV Dataset", type=["csv"])
 
 sample_choice = st.sidebar.selectbox(
     "📊 Or Use Sample Dataset",
@@ -129,7 +119,7 @@ if uploaded_file is not None:
     df = pd.read_csv(uploaded_file)
 
 elif sample_choice == "Visa Approval":
-    df = pd.read_csv("sample_data/visadataset.csv")
+    df = pd.read_csv("sample_data/Visadataset.csv")
 
 elif sample_choice == "Telecom Churn":
     df = pd.read_csv("sample_data/telecom_churn_data.csv")
@@ -138,11 +128,6 @@ elif sample_choice == "Telecom Churn":
 # MAIN APP
 # =========================================
 if df is not None:
-
-    # Handle missing values
-    if df.isnull().sum().sum() > 0:
-        st.warning("⚠️ Missing values detected. Filling with mean.")
-        df = df.fillna(df.mean(numeric_only=True))
 
     st.success("✅ Dataset Loaded Successfully")
 
@@ -153,20 +138,15 @@ if df is not None:
         ["Decision Tree", "Random Forest", "Logistic Regression", "KNN"]
     )
 
-    # Tabs
     tab1, tab2, tab3 = st.tabs(["📊 Dataset", "🧠 Training", "🎯 Prediction"])
 
     # =========================================
-    # DATASET TAB
+    # DATA TAB
     # =========================================
     with tab1:
-        st.subheader("Dataset Preview")
         st.dataframe(df.head())
-
         st.metric("Rows", df.shape[0])
         st.metric("Columns", df.shape[1])
-
-        st.subheader("Target Distribution")
         st.bar_chart(df[target_column].value_counts())
 
     # =========================================
@@ -175,12 +155,20 @@ if df is not None:
     with tab2:
 
         data = df.copy()
-        encoders = {}
 
+        # Handle missing values properly
+        for col in data.columns:
+            if data[col].dtype == "object":
+                data[col] = data[col].fillna("Missing")
+            else:
+                data[col] = data[col].fillna(data[col].mean())
+
+        # Encoding
+        encoders = {}
         for col in data.columns:
             if data[col].dtype == "object":
                 le = LabelEncoder()
-                data[col] = le.fit_transform(data[col].astype(str))
+                data[col] = le.fit_transform(data[col])
                 encoders[col] = le
 
         X = data.drop(target_column, axis=1)
@@ -190,6 +178,12 @@ if df is not None:
             X, y, test_size=0.2, random_state=42
         )
 
+        # 🔥 Scaling (important)
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+
+        # Model selection
         if algorithm == "Decision Tree":
             model = DecisionTreeClassifier()
 
@@ -202,18 +196,23 @@ if df is not None:
         else:
             model = KNeighborsClassifier()
 
-        with st.spinner("Training Model..."):
-            model.fit(X_train, y_train)
+        try:
+            with st.spinner("Training Model..."):
+                model.fit(X_train, y_train)
 
-        accuracy = model.score(X_test, y_test)
+            accuracy = model.score(X_test, y_test)
 
-        st.metric("Accuracy", f"{accuracy * 100:.2f}%")
-        st.progress(float(accuracy))
+            st.metric("Accuracy", f"{accuracy * 100:.2f}%")
+            st.progress(float(accuracy))
 
-        # Save model
-        st.session_state["model"] = model
-        st.session_state["encoders"] = encoders
-        st.session_state["columns"] = X.columns
+            # Save
+            st.session_state["model"] = model
+            st.session_state["encoders"] = encoders
+            st.session_state["scaler"] = scaler
+            st.session_state["columns"] = X.columns
+
+        except Exception as e:
+            st.error(f"Training Failed: {e}")
 
     # =========================================
     # PREDICTION TAB
@@ -223,11 +222,12 @@ if df is not None:
         st.subheader("Make Prediction")
 
         if "model" not in st.session_state:
-            st.warning("⚠️ Please train the model first!")
+            st.warning("⚠️ Train model first!")
             st.stop()
 
         model = st.session_state["model"]
         encoders = st.session_state["encoders"]
+        scaler = st.session_state["scaler"]
         columns = st.session_state["columns"]
 
         input_data = {}
@@ -237,7 +237,7 @@ if df is not None:
                 val = st.selectbox(col, encoders[col].classes_)
                 input_data[col] = encoders[col].transform([val])[0]
             else:
-                input_data[col] = st.number_input(col, value=float(df[col].mean()))
+                input_data[col] = st.number_input(col, value=0.0)
 
         if st.button("Predict"):
 
@@ -245,12 +245,45 @@ if df is not None:
                 time.sleep(2)
 
             input_df = pd.DataFrame([input_data])
-            prediction = model.predict(input_df)[0]
+            input_scaled = scaler.transform(input_df)
+
+            prediction = model.predict(input_scaled)[0]
 
             if target_column in encoders:
                 prediction = encoders[target_column].inverse_transform([prediction])[0]
 
-            st.success(f"Prediction: {prediction}")
+            if str(prediction).lower() in ["denied", "reject", "no", "0"]:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color:#ff4d4d;
+                        padding:15px;
+                        border-radius:10px;
+                        text-align:center;
+                        font-size:20px;
+                        font-weight:bold;
+                        color:white;">
+                        ❌ Prediction: {prediction}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+            else:
+                st.markdown(
+                    f"""
+                    <div style="
+                        background-color:#00cc66;
+                        padding:15px;
+                        border-radius:10px;
+                        text-align:center;
+                        font-size:20px;
+                        font-weight:bold;
+                        color:white;">
+                        ✅ Prediction: {prediction}
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
 
 # =========================================
 # FOOTER
